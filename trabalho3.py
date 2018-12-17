@@ -5,18 +5,18 @@ s = struct.Struct(
     "I 20s I"
 )  # essa é minha struct (I = inteiro, 20s = string de 20 char)
 obj_tam = s.size
-print(obj_tam)
 
 # Constantes
 MAXNARQS = 100
-MAXMEM = 84
+MAXMEM = 56
 TMP_PATH = './tmp'
 
 # Variáveis globais
 max_reg = 0 # Número máximo de arquivos na memória principal
 num_files = 0 # Número de arquivos
 actual_read_file = 1 # Arquivo atual para começar a ser lido para fazer o merge
-first_blank_tmp = 0 # Primeiro arquivo vazio
+tmp_to_write = 0 # Primeiro arquivo vazio
+num_reg = 0
 
 # função definida pois o valor do atributo nome é preenchido automaticamente para ter 20 caracteres
 # dessa forma, pego apenas o nome para a impressão
@@ -55,7 +55,8 @@ def trocar(v, m, n):
 
 def calcConfig():
     global MAXNARQS, MAXMEM, obj_tam, max_reg
-    max_reg = int(MAXMEM/obj_tam)
+    max_reg = int(MAXMEM/obj_tam) if (int(MAXMEM/obj_tam) <= 50) else 50
+
 
 def getObjectFromString(line):
     data = []
@@ -106,12 +107,13 @@ def insertObject(fromFile, toFile, reg): # TODO: checar a marcação do último 
 
 # Este método percorrerá o arquivo e criará as runs em cada arquivo temporário.
 def createRuns():
-    global num_files, actual_read_file, first_blank_tmp
+    global num_files, actual_read_file, tmp_to_write, num_reg
     with open("entrada.dat", "r") as file:
         tmpCount = 0 # Contador de arquivos temporários
         count = 0 # Contador de registros na memória principal 
         data = [] # Registros na memória principal
         for line in file:
+            num_reg += 1
             # Crio o arquivo temporário, caso não exista
             path = TMP_PATH + str(tmpCount+1)
             if os.path.exists(path) == False:
@@ -136,7 +138,7 @@ def createRuns():
             insertObjects(path, data)
         
         aux = num_files
-        first_blank_tmp = num_files+1
+        tmp_to_write = num_files+1
         for i in range (0, aux):
             num_files += 1
             path = TMP_PATH + str(num_files)
@@ -159,63 +161,121 @@ def getLowestId(registers):
                 idx = i
     return [idx, menorObj]
 
-def merge():
-    #TODO:
-    # Pegar o primeiro registro de cada fita
-    # Verficiar o menor entre eles e inserir no novo arquivo temporário
-    global num_files, TMP_PATH, actual_read_file
+# Método retornará se deve ainda fazer merge ou não
+def stillMerge(registers_idx):
+    global tmp_to_write
+    for i in range (0, len(registers_idx)):
+        elem = registers_idx[i]
+        line = readLine(TMP_PATH + str(actual_read_file + i) ,elem)
+        if (line != None):
+            tmp_to_write += 1
+            return True
+    return False
+
+def eliminateFile(path):
+    with open(path, "w") as file:
+        file.writelines([])
+
+def eliminateTmpFiles():
+    global actual_read_file, max_reg, tmp_to_write, num_files
+    tmp_to_write = actual_read_file
+    for i in range (0,max_reg):
+        path = TMP_PATH + str(actual_read_file)
+        eliminateFile(path)
+        actual_read_file += 1
+    if (actual_read_file > num_files):
+        actual_read_file = 1
+
+def finished():
+    global num_files
+    count = 0
+    file = 0
+    for i in range (0, num_files):
+        path = TMP_PATH + str(i + 1)
+        line  = readLine(path, 0)
+        if (line != None):
+            count += 1
+            file = i + 1
+    if (count == 1):
+        return [True, file]
+    else:
+        return False
+
+def finish(file):
+    with open("saida.dat", 'w') as saida:
+        with open(TMP_PATH + str(file), "r+") as file:
+            for i, line in enumerate(file):
+                if (i == num_reg - 1):
+                    line = line[:len(line)-2]
+                saida.write(line)
+
+    for i in range (0, num_files):
+        with open(TMP_PATH + str(i + 1)) as file:
+            file.close()
+        os.remove(TMP_PATH + str(i + 1))
+                
+
+def merge(registers_idx):
+    global num_files, TMP_PATH, actual_read_file, tmp_to_write
+    reg_in_mem = max_reg
     nextRegister = []
-    file_reading = actual_read_file
     registers = []
-    registers_idx = [] # linha a ser lida no arquivo
     registers_runs = [] # array para referenciar o final da run (se True, run finalizada)
+    if (len(registers_idx) == 0):
+        for i in range(max_reg):
+            registers_idx.append(0)
     for i in range(max_reg): # inicia todos como false
         registers_runs.append(False)
-        registers_idx.append(0)
 
     for i in range(0, max_reg): 
         if (registers_runs[i] == False): # Posso ler
-            response = readNextLine(TMP_PATH + str(actual_read_file+i))
-            reg = response[0]
-            registers_runs[i] = response[1]
-            registers.append(reg)
+            response = readLine(TMP_PATH + str(actual_read_file+i), registers_idx[0])
+            if (response == None):
+                registers_runs[i] = True
+                registers.append(None)
+                reg_in_mem -= 1
+            else:
+                reg = response[0]
+                registers_runs[i] = response[1]
+                registers.append(reg)
 
-    while ((False in registers_runs) == True):
-
+    while (reg_in_mem > 0):
         if (len(nextRegister) > 0 and nextRegister[1] == True):
                 registers_runs[response[0]] = True
-
         # Pega o menor dos registros na memória principal
         response = getLowestId(registers)
         fromFile = TMP_PATH + str(response[0]+actual_read_file)
-        toFile = TMP_PATH + str(first_blank_tmp)
+        toFile = TMP_PATH + str(tmp_to_write)
         registerObj = response[1]
 
         # Insere o registro no novo arquivo temporario
-        insertObject(fromFile, toFile, getStringFromObject(registerObj))
+        reg_insert = getStringFromObject(registerObj)
+        if (registers_runs[response[0]] == True and reg_in_mem == 1):
+            reg_insert += '.'
+        insertObject(fromFile, toFile, reg_insert)
         # Remove o registro da memória principal
         registers.remove(response[1])
-        if (registers_runs[response[0]] == True):
-            registers.insert(response[0], None)
-        # Atualiza o index a ser lido
+        # Atualiza o próximo index a ser lido
         registers_idx[response[0]] += 1
         # Pega o proximo registro no arquivo que foi retirado e guarda na memória principal
+        # Caso a run esteja finalizada, marca como None
         if (registers_runs[response[0]] == True):
-            print("acabou run")
-            # while (registers_runs[response[0]] == True):
-            #     file_reading += 1
-                # fromFile = TMP_PATH + str(response[0]+actual_read_file)
+            registers.insert(response[0], None)
+            reg_in_mem -= 1
         else:
             nextRegister = readLine(fromFile, registers_idx[response[0]])
             registers.insert(response[0], nextRegister[0])
-            
     
-    
-    
-
-
-
+    if (stillMerge(registers_idx)):
+        merge(registers_idx)
+    else:
+        eliminateTmpFiles()
+        response = finished()
+        if (response == False):
+            merge([])
+        # else:
+        #     finish(response[1])
+           
 calcConfig()
 createRuns()
-merge()
-# print(readLine('entrada.dat', 3))
+merge([])
